@@ -3,7 +3,6 @@ package swagger
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 
@@ -45,8 +44,6 @@ func (s *Serve) Middleware() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		s.log.Info(string(s.content))
-
 		w.WriteHeader(http.StatusOK)
 		_, err := w.Write(s.content)
 		if err != nil {
@@ -66,7 +63,7 @@ func (s *Serve) Setup() error {
 		return err
 	}
 
-	log.Info("opening swagger file")
+	log.Info("opening swagger file swagger")
 
 	file, err := sfs.Open(s.path)
 	if err != nil {
@@ -74,14 +71,14 @@ func (s *Serve) Setup() error {
 	}
 	defer file.Close()
 
-	log.Info("reading file")
+	log.Info("reading file swagger")
 
 	content, err := io.ReadAll(file)
 	if err != nil {
 		return err
 	}
 
-	log.Info("unmarshalling file")
+	log.Info("unmarshalling file swagger")
 
 	var schema map[string]any
 
@@ -91,10 +88,8 @@ func (s *Serve) Setup() error {
 		return err
 	}
 
-	log.Info("host", slog.Any("host", s.host))
-
 	if s.host != nil {
-		log.Info("changing host in swagger", slog.String("new_base_url", *s.host), slog.String("old_base_url", schema["host"].(string)))
+		log.Info("changing host in swagger file", slog.String("new_base_url", *s.host), slog.String("old_base_url", schema["host"].(string)))
 
 		schema["host"] = *s.host
 	}
@@ -104,51 +99,9 @@ func (s *Serve) Setup() error {
 		return err
 	}
 
-	log.Info("successfully setup")
+	log.Info("successfully setup swagger")
 
 	s.content = content
 
-	log.Info(string(s.content))
-
 	return nil
-}
-
-func ServeFile(path string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Serving swagger file: %s", path)
-
-		statikFs, err := fs.New()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Open swagger file: %s", path)
-
-		file, err := statikFs.Open(path)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		log.Printf("Read swagger file: %s", path)
-
-		content, err := io.ReadAll(file)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Write swagger file: %s", path)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, err = w.Write(content)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Served swagger file: %s", path)
-	}
 }
