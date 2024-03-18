@@ -10,25 +10,6 @@ import (
 	"github.com/rakyll/statik/fs"
 )
 
-type Schema struct {
-	Version string `json:"swagger"`
-	Info    struct {
-		Title   string `json:"title"`
-		Version string `json:"version"`
-		Contact struct {
-			Name string `json:"name"`
-			URL  string `json:"url"`
-		} `json:"contact"`
-	} `json:"info"`
-	Tags []struct {
-		Name string `json:"name"`
-	} `json:"tags"`
-	Host     string   `json:"host"`
-	Schemes  []string `json:"schemes"`
-	Consumes []string `json:"consumes"`
-	Produces []string `json:"produces"`
-}
-
 type Serve struct {
 	log *slog.Logger
 
@@ -64,6 +45,9 @@ func (s *Serve) Middleware() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
+		s.log.Info(string(s.content))
+
+		w.WriteHeader(http.StatusOK)
 		_, err := w.Write(s.content)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -99,16 +83,20 @@ func (s *Serve) Setup() error {
 
 	log.Info("unmarshalling file")
 
-	var schema *Schema
+	var schema map[string]any
 
-	if err := json.Unmarshal(content, schema); err != nil {
+	if err := json.Unmarshal(content, &schema); err != nil {
+		log.Info(err.Error())
+
 		return err
 	}
 
-	if s.host != nil {
-		log.Info("changing host in swagger", slog.String("new_base_url", *s.host), slog.String("old_base_url", schema.Host))
+	log.Info("host", slog.Any("host", s.host))
 
-		schema.Host = *s.host
+	if s.host != nil {
+		log.Info("changing host in swagger", slog.String("new_base_url", *s.host), slog.String("old_base_url", schema["host"].(string)))
+
+		schema["host"] = *s.host
 	}
 
 	content, err = json.Marshal(schema)
@@ -116,7 +104,11 @@ func (s *Serve) Setup() error {
 		return err
 	}
 
+	log.Info("successfully setup")
+
 	s.content = content
+
+	log.Info(string(s.content))
 
 	return nil
 }

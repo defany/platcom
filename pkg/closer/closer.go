@@ -20,7 +20,6 @@ func Add(fns ...func() error) {
 func Close() {
 	closer.Close()
 
-	// Я думаю, что мы можем сделать так, так как Wait неотьемлема от Close
 	closer.Wait()
 }
 
