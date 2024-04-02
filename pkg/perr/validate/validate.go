@@ -17,7 +17,7 @@ func NewError(messages ...string) *Error {
 	}
 }
 
-func Validate(v any) error {
+func NewValidate(v any) error {
 	if r := validate.Struct(v); !r.Validate() {
 		return NewError(r.Errors.String())
 	}
