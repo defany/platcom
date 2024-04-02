@@ -1,11 +1,18 @@
 package validate
 
 import (
+	"encoding/json"
 	"errors"
-	"strings"
 
+	"github.com/defany/platcom/pkg/perr/codes"
 	"github.com/gookit/validate"
 )
+
+type ErrorWithDetails struct {
+	Code    codes.Code `json:"code"`
+	Message string     `json:"message"`
+	Details []string   `json:"details,omitempty"`
+}
 
 type Error struct {
 	Messages []string `json:"error_messages"`
@@ -18,6 +25,10 @@ func NewError(messages ...string) *Error {
 }
 
 func NewValidate(v any) error {
+	validate.Config(func(opt *validate.GlobalOption) {
+		opt.StopOnError = false
+	})
+
 	if r := validate.Struct(v); !r.Validate() {
 		return NewError(r.Errors.String())
 	}
@@ -30,7 +41,20 @@ func (e *Error) addError(message string) {
 }
 
 func (e *Error) Error() string {
-	return strings.Join(e.Messages, "\n")
+	v, err := json.Marshal(e.Messages)
+	if err != nil {
+		return err.Error()
+	}
+
+	return string(v)
+}
+
+func (e *Error) ErrorWithDetails() ErrorWithDetails {
+	return ErrorWithDetails{
+		Code:    codes.InvalidArgument,
+		Message: "bad validation",
+		Details: e.Messages,
+	}
 }
 
 func IsValidationError(err error) bool {
