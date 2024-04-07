@@ -2,6 +2,8 @@ package conf
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 
 	gocfg "github.com/dsbasko/go-cfg"
 )
@@ -16,11 +18,21 @@ type fileFinder struct {
 
 type Reader[T any] struct {
 	filePath string
+
+	logger *slog.Logger
 }
 
 // NewReader creates a new structure with a type of your config.
 func NewReader[T any]() *Reader[T] {
-	return &Reader[T]{}
+	return &Reader[T]{
+		logger: slog.Default(),
+	}
+}
+
+func (r *Reader[T]) WithLogger(logger *slog.Logger) *Reader[T] {
+	r.logger = logger
+
+	return r
 }
 
 // WithFilePath sets a path to your file-config
@@ -70,19 +82,29 @@ Read - this method reads environment variables, flags and file by path (to pass 
 func (r *Reader[T]) Read() (T, error) {
 	cfg := new(T)
 
+	r.logger.Info("reading flags...")
+
 	if err := gocfg.ReadFlag(cfg); err != nil {
 		return *cfg, err
 	}
 
 	if r.filePath != "" {
+		r.logger.Info("reading config file...", slog.String("path", r.filePath))
+
 		if err := gocfg.ReadFile(r.filePath, cfg); err != nil {
 			return *cfg, err
 		}
+	} else {
+		r.logger.Info("config file is missing, skipping...")
 	}
+
+	r.logger.Info("reading env variables...")
 
 	if err := gocfg.ReadEnv(cfg); err != nil {
 		return *cfg, err
 	}
+
+	r.logger.Info("config read successfully", slog.String("cfg_type", fmt.Sprintf("%T", *cfg)))
 
 	return *cfg, nil
 }
