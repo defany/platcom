@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/rakyll/statik/fs"
 )
@@ -12,14 +13,14 @@ import (
 type Serve struct {
 	log *slog.Logger
 
-	path string
+	path []string
 
 	host *string
 
-	content []byte
+	content map[string][]byte
 }
 
-func NewServe(path string) *Serve {
+func NewServe(path ...string) *Serve {
 	s := &Serve{
 		log:  slog.Default(),
 		path: path,
@@ -40,12 +41,12 @@ func (s *Serve) WithHost(host string) *Serve {
 	return s
 }
 
-func (s *Serve) Middleware() http.HandlerFunc {
+func (s *Serve) Middleware(path string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		w.WriteHeader(http.StatusOK)
-		_, err := w.Write(s.content)
+		_, err := w.Write(s.content[path])
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -55,9 +56,19 @@ func (s *Serve) Middleware() http.HandlerFunc {
 
 func (s *Serve) Setup() error {
 	log := s.log.With(
-		slog.String("path", s.path),
+		slog.String("paths", strings.Join(s.path, ",")),
 	)
 
+	for _, path := range s.path {
+		if err := s.addContent(log, path); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Serve) addContent(log *slog.Logger, path string) error {
 	sfs, err := fs.New()
 	if err != nil {
 		return err
@@ -65,7 +76,7 @@ func (s *Serve) Setup() error {
 
 	log.Info("opening swagger file swagger")
 
-	file, err := sfs.Open(s.path)
+	file, err := sfs.Open(path)
 	if err != nil {
 		return err
 	}
@@ -101,7 +112,7 @@ func (s *Serve) Setup() error {
 
 	log.Info("successfully setup swagger")
 
-	s.content = content
+	s.content[path] = content
 
 	return nil
 }

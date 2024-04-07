@@ -48,6 +48,8 @@ WithFileFinder - will try to find config path in flags passed to application and
 To pass a config file use flags like: -c="some very cool path to config" --config="some very cool path with long flag" or use CONFIG_FILE_PATH env variable
 */
 func (r *Reader[T]) WithFileFinder() error {
+	r.logger.Info("finding config file...")
+
 	fr := NewReader[fileFinder]()
 
 	fr.WithLogger(r.logger)
