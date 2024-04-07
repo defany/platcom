@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/rakyll/statik/fs"
 )
@@ -13,14 +12,14 @@ import (
 type Serve struct {
 	log *slog.Logger
 
-	path []string
+	path string
 
 	host *string
 
-	content map[string][]byte
+	content []byte
 }
 
-func NewServe(path ...string) *Serve {
+func NewServe(path string) *Serve {
 	s := &Serve{
 		log:  slog.Default(),
 		path: path,
@@ -56,19 +55,9 @@ func (s *Serve) Middleware(path string) http.HandlerFunc {
 
 func (s *Serve) Setup() error {
 	log := s.log.With(
-		slog.String("paths", strings.Join(s.path, ",")),
+		slog.String("path", s.path),
 	)
 
-	for _, path := range s.path {
-		if err := s.addContent(log, path); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *Serve) addContent(log *slog.Logger, path string) error {
 	sfs, err := fs.New()
 	if err != nil {
 		return err
@@ -76,7 +65,7 @@ func (s *Serve) addContent(log *slog.Logger, path string) error {
 
 	log.Info("opening swagger file swagger")
 
-	file, err := sfs.Open(path)
+	file, err := sfs.Open(s.path)
 	if err != nil {
 		return err
 	}
@@ -112,7 +101,7 @@ func (s *Serve) addContent(log *slog.Logger, path string) error {
 
 	log.Info("successfully setup swagger")
 
-	s.content[path] = content
+	s.content = content
 
 	return nil
 }
