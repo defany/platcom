@@ -13,7 +13,7 @@ var (
 )
 
 type fileFinder struct {
-	Path string `s-flag:"cfg" flag:"config" env:"CONFIG_FILE_PATH" description:"path to config file of app"`
+	Path string `s-flag:"c" flag:"config" env:"CONFIG_FILE_PATH" description:"path to config file of app"`
 }
 
 type Reader[T any] struct {
