@@ -45,10 +45,12 @@ func (r *Reader[T]) WithFilePath(path string) *Reader[T] {
 /*
 WithFileFinder - will try to find config path in flags passed to application and in environment variables
 
-To pass a config file use flags like: -cfg="some very cool path" --config="some very cool path with long flag" or use CONFIG_FILE_PATH env variable
+To pass a config file use flags like: -c="some very cool path to config" --config="some very cool path with long flag" or use CONFIG_FILE_PATH env variable
 */
 func (r *Reader[T]) WithFileFinder() error {
 	fr := NewReader[fileFinder]()
+
+	fr.WithLogger(r.logger)
 
 	ff, err := fr.Read()
 	if err != nil {
