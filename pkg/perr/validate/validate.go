@@ -61,3 +61,12 @@ func IsValidationError(err error) bool {
 	var ve *Error
 	return errors.As(err, &ve)
 }
+
+func ToValidationError(err error) *Error {
+	var ce *Error
+	if !IsValidationError(err) {
+		return nil
+	}
+
+	return ce
+}
