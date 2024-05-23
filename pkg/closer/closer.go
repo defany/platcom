@@ -7,8 +7,6 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-
-	"golang.org/x/exp/slices"
 )
 
 var closer = New(os.Interrupt, syscall.SIGTERM)
