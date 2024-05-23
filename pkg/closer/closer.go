@@ -72,8 +72,6 @@ func (c *Closer) Close() {
 		c.mu.Lock()
 		fns := c.fns
 
-		slices.Reverse(fns)
-
 		c.fns = nil
 		c.mu.Unlock()
 
