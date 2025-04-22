@@ -96,12 +96,14 @@ func (c *Closer) Close() {
 
 			select {
 			case <-ctx.Done():
-				logger.Error("closer timeout", slog.Int("fn_index", i), slog.String("error", ctx.Err().Error()))
+				logger.Error("closer timeout", slog.Int("fn_number", i+1), slog.String("error", ctx.Err().Error()))
 				errs = append(errs, ctx.Err())
 			case ferr := <-done:
 				if ferr != nil {
-					logger.Error("closer function failed", slog.Int("fn_index", i), slog.String("error", ferr.Error()))
+					logger.Error("closer function failed", slog.Int("fn_number", i+1), slog.String("error", ferr.Error()))
 					errs = append(errs, ferr)
+				} else {
+					logger.Info("closer function done", slog.Int("fn_number", i+1))
 				}
 			}
 		}
