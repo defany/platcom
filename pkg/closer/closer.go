@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -84,6 +85,8 @@ func (c *Closer) Close() {
 		c.mu.Unlock()
 
 		var errs []error
+
+		slices.Reverse(fns)
 
 		for i, fn := range fns {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
