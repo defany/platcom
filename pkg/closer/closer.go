@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -52,6 +51,8 @@ func NewWithLogger(logger *slog.Logger, sig ...os.Signal) *Closer {
 			<-ch
 			signal.Stop(ch)
 			c.Close()
+
+			os.Exit(0)
 		}()
 	}
 
@@ -86,16 +87,12 @@ func (c *Closer) Close() {
 
 		var errs []error
 
-		slices.Reverse(fns)
-
 		for i, fn := range fns {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
 			done := make(chan error, 1)
-			go func() {
+			go func(fn func() error) {
 				done <- fn()
-			}()
+			}(fn)
 
 			select {
 			case <-ctx.Done():
@@ -109,6 +106,8 @@ func (c *Closer) Close() {
 					logger.Info("closer function done", slog.Int("fn_number", i+1))
 				}
 			}
+
+			cancel()
 		}
 
 		if len(errs) > 0 {
