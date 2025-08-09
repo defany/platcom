@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/defany/platcom/pkg/perr/codes"
+	"github.com/defany/platcom/v2/pkg/perr/codes"
 	"github.com/gookit/validate"
 )
 

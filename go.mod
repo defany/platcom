@@ -1,4 +1,4 @@
-module github.com/defany/platcom
+module github.com/defany/platcom/v2
 
 go 1.22
 
@@ -6,7 +6,7 @@ require (
 	github.com/dsbasko/go-cfg v1.2.0
 	github.com/gookit/validate v1.5.2
 	github.com/rakyll/statik v0.1.7
-	golang.org/x/exp v0.0.0-20240314144324-c7f7c6466f7f
+	golang.org/x/sync v0.5.0
 )
 
 require (

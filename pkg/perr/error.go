@@ -3,7 +3,7 @@ package perr
 import (
 	"errors"
 
-	"github.com/defany/platcom/pkg/perr/codes"
+	"github.com/defany/platcom/v2/pkg/perr/codes"
 )
 
 type Err struct {
