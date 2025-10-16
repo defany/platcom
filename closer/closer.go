@@ -42,6 +42,11 @@ type Closer struct {
 	isGlobal bool
 }
 
+type Task struct {
+	c         *Closer
+	startedCh chan struct{}
+}
+
 var defaultCloser = func() *Closer {
 	c := New()
 	c.isGlobal = true
@@ -52,7 +57,7 @@ func SetLogger(l *slog.Logger)                                { defaultCloser.Se
 func Context() context.Context                                { return defaultCloser.Context() }
 func ToClose(fns ...func(context.Context) error)              { defaultCloser.ToClose(fns...) }
 func ToCloseNamed(name string, f func(context.Context) error) { defaultCloser.ToCloseNamed(name, f) }
-func Go(fn func(context.Context) error)                       { defaultCloser.Go(fn) }
+func Go(fn func(context.Context) error) *Task                 { return defaultCloser.Go(fn) }
 func Close(ctx context.Context) error                         { return defaultCloser.Close(ctx) }
 func Wait() error                                             { return defaultCloser.Wait() }
 
@@ -129,8 +134,13 @@ func (c *Closer) ToCloseNamed(name string, f func(context.Context) error) {
 	c.mu.Unlock()
 }
 
-func (c *Closer) Go(fn func(context.Context) error) {
+func (c *Closer) Go(fn func(context.Context) error) *Task {
+	t := &Task{
+		c:         c,
+		startedCh: make(chan struct{}),
+	}
 	c.grp.Go(func() error {
+		close(t.startedCh)
 		err := fn(c.grpCtx)
 		if err != nil {
 			c.setFirstErr(err)
@@ -138,6 +148,20 @@ func (c *Closer) Go(fn func(context.Context) error) {
 		}
 		return err
 	})
+	return t
+}
+
+func (t *Task) With(fn func(context.Context) error) *Task {
+	t.c.grp.Go(func() error {
+		<-t.startedCh
+		err := fn(t.c.grpCtx)
+		if err != nil {
+			t.c.setFirstErr(err)
+			t.c.initiateShutdown()
+		}
+		return err
+	})
+	return t
 }
 
 func (c *Closer) Close(ctx context.Context) error {
