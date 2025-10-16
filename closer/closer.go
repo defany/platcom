@@ -43,9 +43,13 @@ type Closer struct {
 }
 
 type Task struct {
-	c         *Closer
-	startedCh chan struct{}
+	c           *Closer
+	startedCh   chan struct{}
+	confirmedCh chan struct{}
+	mu          sync.Mutex
 }
+
+type ctxKeyConfirm struct{}
 
 var defaultCloser = func() *Closer {
 	c := New()
@@ -61,6 +65,9 @@ func Go(fn func(context.Context) error) *Task                 { return defaultCl
 func Close(ctx context.Context) error                         { return defaultCloser.Close(ctx) }
 func Wait() error                                             { return defaultCloser.Wait() }
 
+// Deprecated: use With.
+func (t *Task) After(fn func(context.Context) error) *Task { return t.With(fn) }
+
 func New(signals ...os.Signal) *Closer {
 	return NewWithLogger(slog.Default(), signals...)
 }
@@ -69,9 +76,7 @@ func NewWithLogger(logger *slog.Logger, signals ...os.Signal) *Closer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-
 	c := &Closer{
 		done:       make(chan struct{}),
 		logger:     logger,
@@ -79,21 +84,15 @@ func NewWithLogger(logger *slog.Logger, signals ...os.Signal) *Closer {
 		rootCancel: cancel,
 	}
 	c.grp, c.grpCtx = errgroup.WithContext(c.rootCtx)
-
 	if len(signals) == 0 {
 		signals = []os.Signal{os.Interrupt, syscall.SIGTERM}
 	}
-
 	go c.handleSignals(signals...)
-
 	return c
 }
 
 func (c *Closer) Context() context.Context { return c.rootCtx }
-
-func (c *Closer) SetLogger(l *slog.Logger) {
-	c.logger = l
-}
+func (c *Closer) SetLogger(l *slog.Logger) { c.logger = l }
 
 func (c *Closer) ToClose(fns ...func(context.Context) error) {
 	skip := 2
@@ -101,7 +100,6 @@ func (c *Closer) ToClose(fns ...func(context.Context) error) {
 		skip = 3
 	}
 	src := callerName(skip)
-
 	c.mu.Lock()
 	for _, f := range fns {
 		c.funcs = append(c.funcs, closeFn{fn: f, source: src})
@@ -115,7 +113,6 @@ func (c *Closer) ToCloseNamed(name string, f func(context.Context) error) {
 		skip = 3
 	}
 	src := callerName(skip)
-
 	wrapped := func(ctx context.Context) error {
 		start := time.Now()
 		c.logger.Info("closing dependency start", slog.String("name", name), slog.String("source", src))
@@ -128,7 +125,6 @@ func (c *Closer) ToCloseNamed(name string, f func(context.Context) error) {
 		c.logger.Info("closing dependency done", slog.String("name", name), slog.String("source", src), slog.Duration("duration", d))
 		return nil
 	}
-
 	c.mu.Lock()
 	c.funcs = append(c.funcs, closeFn{fn: wrapped, source: src})
 	c.mu.Unlock()
@@ -136,12 +132,18 @@ func (c *Closer) ToCloseNamed(name string, f func(context.Context) error) {
 
 func (c *Closer) Go(fn func(context.Context) error) *Task {
 	t := &Task{
-		c:         c,
-		startedCh: make(chan struct{}),
+		c:           c,
+		startedCh:   make(chan struct{}),
+		confirmedCh: make(chan struct{}),
 	}
+	// По умолчанию подтверждение сразу "разрешено" — для обратной совместимости.
+	close(t.confirmedCh)
+
 	c.grp.Go(func() error {
+		confirm := func() { t.Confirm() }
+		ctx := context.WithValue(c.grpCtx, ctxKeyConfirm{}, confirm)
 		close(t.startedCh)
-		err := fn(c.grpCtx)
+		err := fn(ctx)
 		if err != nil {
 			c.setFirstErr(err)
 			c.initiateShutdown()
@@ -154,6 +156,7 @@ func (c *Closer) Go(fn func(context.Context) error) *Task {
 func (t *Task) With(fn func(context.Context) error) *Task {
 	t.c.grp.Go(func() error {
 		<-t.startedCh
+		<-t.confirmedCh
 		err := fn(t.c.grpCtx)
 		if err != nil {
 			t.c.setFirstErr(err)
@@ -164,27 +167,52 @@ func (t *Task) With(fn func(context.Context) error) *Task {
 	return t
 }
 
+// Требует явного подтверждения старта перед запуском любых With.
+func (t *Task) NeedConfirm() *Task {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	select {
+	case <-t.confirmedCh:
+		t.confirmedCh = make(chan struct{})
+	default:
+	}
+	return t
+}
+
+// Подтверждает старт: снимает блок с With.
+func (t *Task) Confirm() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	select {
+	case <-t.confirmedCh:
+		return
+	default:
+		close(t.confirmedCh)
+	}
+}
+
+// Хелпер для вызова подтверждения изнутри основной функции.
+func Confirm(ctx context.Context) {
+	if f, ok := ctx.Value(ctxKeyConfirm{}).(func()); ok && f != nil {
+		f()
+	}
+}
+
 func (c *Closer) Close(ctx context.Context) error {
 	var result error
-
 	c.once.Do(func() {
 		defer close(c.done)
-
 		c.rootCancel()
-
 		c.mu.Lock()
 		funcs := slices.Clone(c.funcs)
 		c.funcs = nil
 		c.mu.Unlock()
-
 		if len(funcs) == 0 {
 			c.logger.Info("no resources to close")
 			return
 		}
-
 		c.logger.Info("starting graceful shutdown", slog.Int("count", len(funcs)))
 		slices.Reverse(funcs)
-
 		for i, item := range funcs {
 			if err := ctx.Err(); err != nil {
 				c.logger.Warn("shutdown context canceled", slog.String("error", err.Error()))
@@ -193,7 +221,6 @@ func (c *Closer) Close(ctx context.Context) error {
 				}
 				break
 			}
-
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -203,7 +230,6 @@ func (c *Closer) Close(ctx context.Context) error {
 						}
 					}
 				}()
-
 				start := time.Now()
 				if err := item.fn(ctx); err != nil {
 					c.logger.Error("closer returned error", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()), slog.String("source", item.source))
@@ -212,25 +238,21 @@ func (c *Closer) Close(ctx context.Context) error {
 					}
 					return
 				}
-
 				c.logger.Info("closer completed", slog.Duration("duration", time.Since(start)), slog.String("source", item.source))
 			}()
 		}
-
 		if result == nil {
 			c.logger.Info("graceful shutdown completed successfully")
 		} else {
 			c.logger.Error("graceful shutdown completed with errors", slog.String("error", result.Error()))
 		}
 	})
-
 	return result
 }
 
 func (c *Closer) Wait() error {
 	grpDone := make(chan error, 1)
 	go func() { grpDone <- c.grp.Wait() }()
-
 	select {
 	case err := <-grpDone:
 		c.setFirstErr(err)
@@ -239,7 +261,6 @@ func (c *Closer) Wait() error {
 		}
 	case <-c.done:
 	}
-
 	<-c.done
 	return c.firstErr
 }
@@ -248,7 +269,6 @@ func (c *Closer) handleSignals(signals ...os.Signal) {
 	ch := make(chan os.Signal, len(signals))
 	signal.Notify(ch, signals...)
 	defer signal.Stop(ch)
-
 	select {
 	case <-ch:
 		c.logger.Info("signal received, initiating shutdown")
