@@ -21,13 +21,28 @@ const shutdownTimeout = 5 * time.Second
 type closeFn struct {
 	fn     func(context.Context) error
 	source string
+	name   string
+}
+
+type itemState int
+
+const (
+	statePending itemState = iota
+	stateRunning
+	stateDone
+	stateFailed
+)
+
+type closeItem struct {
+	closeFn
+	state itemState
+	err   error
 }
 
 type Closer struct {
 	mu     sync.Mutex
 	once   sync.Once
 	done   chan struct{}
-	funcs  []closeFn
 	logger *slog.Logger
 
 	rootCtx    context.Context
@@ -40,6 +55,8 @@ type Closer struct {
 	firstErr     error
 
 	isGlobal bool
+
+	funcs []closeItem
 }
 
 type Task struct {
@@ -65,7 +82,6 @@ func Go(fn func(context.Context) error) *Task                 { return defaultCl
 func Close(ctx context.Context) error                         { return defaultCloser.Close(ctx) }
 func Wait() error                                             { return defaultCloser.Wait() }
 
-// Deprecated: use With.
 func (t *Task) After(fn func(context.Context) error) *Task { return t.With(fn) }
 
 func New(signals ...os.Signal) *Closer {
@@ -102,7 +118,10 @@ func (c *Closer) ToClose(fns ...func(context.Context) error) {
 	src := callerName(skip)
 	c.mu.Lock()
 	for _, f := range fns {
-		c.funcs = append(c.funcs, closeFn{fn: f, source: src})
+		c.funcs = append(c.funcs, closeItem{
+			closeFn: closeFn{fn: f, source: src},
+			state:   statePending,
+		})
 	}
 	c.mu.Unlock()
 }
@@ -126,7 +145,10 @@ func (c *Closer) ToCloseNamed(name string, f func(context.Context) error) {
 		return nil
 	}
 	c.mu.Lock()
-	c.funcs = append(c.funcs, closeFn{fn: wrapped, source: src})
+	c.funcs = append(c.funcs, closeItem{
+		closeFn: closeFn{fn: wrapped, source: src, name: name},
+		state:   statePending,
+	})
 	c.mu.Unlock()
 }
 
@@ -136,9 +158,7 @@ func (c *Closer) Go(fn func(context.Context) error) *Task {
 		startedCh:   make(chan struct{}),
 		confirmedCh: make(chan struct{}),
 	}
-	// По умолчанию подтверждение сразу "разрешено" — для обратной совместимости.
 	close(t.confirmedCh)
-
 	c.grp.Go(func() error {
 		confirm := func() { t.Confirm() }
 		ctx := context.WithValue(c.grpCtx, ctxKeyConfirm{}, confirm)
@@ -167,7 +187,6 @@ func (t *Task) With(fn func(context.Context) error) *Task {
 	return t
 }
 
-// Требует явного подтверждения старта перед запуском любых With.
 func (t *Task) NeedConfirm() *Task {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -179,7 +198,6 @@ func (t *Task) NeedConfirm() *Task {
 	return t
 }
 
-// Подтверждает старт: снимает блок с With.
 func (t *Task) Confirm() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -191,7 +209,6 @@ func (t *Task) Confirm() {
 	}
 }
 
-// Хелпер для вызова подтверждения изнутри основной функции.
 func Confirm(ctx context.Context) {
 	if f, ok := ctx.Value(ctxKeyConfirm{}).(func()); ok && f != nil {
 		f()
@@ -203,17 +220,37 @@ func (c *Closer) Close(ctx context.Context) error {
 	c.once.Do(func() {
 		defer close(c.done)
 		c.rootCancel()
+
+		grpDone := make(chan error, 1)
+		go func() { grpDone <- c.grp.Wait() }()
+		select {
+		case err := <-grpDone:
+			if err != nil && result == nil {
+				result = err
+			}
+			c.logger.Info("all tasks completed before closing")
+		case <-ctx.Done():
+			if result == nil {
+				result = ctx.Err()
+			}
+			c.logger.Warn("shutdown context expired while waiting tasks; proceeding with close", slog.String("error", ctx.Err().Error()))
+		}
+
 		c.mu.Lock()
 		funcs := slices.Clone(c.funcs)
 		c.funcs = nil
 		c.mu.Unlock()
+
 		if len(funcs) == 0 {
 			c.logger.Info("no resources to close")
 			return
 		}
+
 		c.logger.Info("starting graceful shutdown", slog.Int("count", len(funcs)))
 		slices.Reverse(funcs)
-		for i, item := range funcs {
+
+		for i := range funcs {
+			it := &funcs[i]
 			if err := ctx.Err(); err != nil {
 				c.logger.Warn("shutdown context canceled", slog.String("error", err.Error()))
 				if result == nil {
@@ -224,23 +261,30 @@ func (c *Closer) Close(ctx context.Context) error {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						c.logger.Error("panic recovered in closer", slog.Int("index", i), slog.Any("panic", r), slog.String("source", item.source))
+						it.state = stateFailed
+						c.logger.Error("panic recovered in closer", slog.Int("index", i), slog.Any("panic", r), slog.String("source", it.source), slog.String("name", it.name))
 						if result == nil {
 							result = errors.New("panic recovered in closer")
 						}
 					}
 				}()
+				it.state = stateRunning
 				start := time.Now()
-				if err := item.fn(ctx); err != nil {
-					c.logger.Error("closer returned error", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()), slog.String("source", item.source))
+				err := it.fn(ctx)
+				if err != nil {
+					it.state = stateFailed
+					it.err = err
+					c.logger.Error("closer returned error", slog.Duration("duration", time.Since(start)), slog.String("error", err.Error()), slog.String("source", it.source), slog.String("name", it.name))
 					if result == nil {
 						result = err
 					}
 					return
 				}
-				c.logger.Info("closer completed", slog.Duration("duration", time.Since(start)), slog.String("source", item.source))
+				it.state = stateDone
+				c.logger.Info("closer completed", slog.Duration("duration", time.Since(start)), slog.String("source", it.source), slog.String("name", it.name))
 			}()
 		}
+
 		if result == nil {
 			c.logger.Info("graceful shutdown completed successfully")
 		} else {
