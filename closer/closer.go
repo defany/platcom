@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const shutdownTimeout = 5 * time.Second
+var shutdownTimeout = 5 * time.Second
 
 type closeFn struct {
 	fn     func(context.Context) error
@@ -307,6 +307,10 @@ func (c *Closer) Wait() error {
 	}
 	<-c.done
 	return c.firstErr
+}
+
+func SetShutdownTimeout(duration time.Duration) {
+	shutdownTimeout = duration
 }
 
 func (c *Closer) handleSignals(signals ...os.Signal) {
